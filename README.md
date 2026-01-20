@@ -21,8 +21,8 @@ const renderbase = new Renderbase({
   apiKey: process.env.RENDERBASE_API_KEY!,
 });
 
-// Generate a PDF document
-const result = await renderbase.documents.generatePdf({
+// Generate a PDF document (async - returns job info immediately)
+const job = await renderbase.documents.generatePdf({
   templateId: 'tmpl_invoice',
   variables: {
     customerName: 'John Doe',
@@ -31,8 +31,12 @@ const result = await renderbase.documents.generatePdf({
   },
 });
 
-console.log('Job ID:', result.jobId);
-console.log('Download URL:', result.downloadUrl);
+console.log('Job ID:', job.jobId);
+console.log('Status:', job.status);  // 'queued'
+
+// Wait for completion to get the download URL
+const completed = await renderbase.documents.waitForCompletion(job.jobId);
+console.log('Download URL:', completed.downloadUrl);
 ```
 
 ## Features
@@ -51,7 +55,8 @@ console.log('Download URL:', result.downloadUrl);
 ### Generate PDF Document
 
 ```typescript
-const result = await renderbase.documents.generatePdf({
+// Queue document generation
+const job = await renderbase.documents.generatePdf({
   templateId: 'tmpl_invoice',
   variables: {
     invoiceNumber: 'INV-001',
@@ -64,13 +69,15 @@ const result = await renderbase.documents.generatePdf({
   },
 });
 
-console.log('Download URL:', result.downloadUrl);
+// Wait for completion and get download URL
+const completed = await renderbase.documents.waitForCompletion(job.jobId);
+console.log('Download URL:', completed.downloadUrl);
 ```
 
 ### Generate Excel Document
 
 ```typescript
-const result = await renderbase.documents.generateExcel({
+const job = await renderbase.documents.generateExcel({
   templateId: 'tmpl_report',
   variables: {
     reportMonth: 'January 2026',
@@ -82,39 +89,27 @@ const result = await renderbase.documents.generateExcel({
   },
 });
 
-console.log('Download URL:', result.downloadUrl);
-```
-
-### Generate Document in Specific Workspace
-
-```typescript
-// Generate document in a specific workspace
-const result = await renderbase.documents.generatePdf({
-  templateId: 'tmpl_invoice',
-  workspaceId: 'ws_abc123',  // Optional: specify target workspace
-  variables: {
-    invoiceNumber: 'INV-001',
-    customerName: 'John Doe',
-  },
-});
+const completed = await renderbase.documents.waitForCompletion(job.jobId);
+console.log('Download URL:', completed.downloadUrl);
 ```
 
 ### Generate Batch Documents
 
 ```typescript
-const result = await renderbase.documents.generateBatch({
+// Queue batch generation - each object in documents array contains variables for one document
+const batch = await renderbase.documents.generateBatch({
   templateId: 'tmpl_invoice',
   format: 'pdf',
   documents: [
-    { variables: { invoiceNumber: 'INV-001', customerName: 'John Doe' } },
-    { variables: { invoiceNumber: 'INV-002', customerName: 'Jane Smith' } },
-    { variables: { invoiceNumber: 'INV-003', customerName: 'Bob Wilson' } },
+    { invoiceNumber: 'INV-001', customerName: 'John Doe' },
+    { invoiceNumber: 'INV-002', customerName: 'Jane Smith' },
+    { invoiceNumber: 'INV-003', customerName: 'Bob Wilson' },
   ],
-  workspaceId: 'ws_abc123',  // Optional: specify target workspace
 });
 
-console.log('Batch ID:', result.batchId);
-console.log('Total documents:', result.totalDocuments);
+console.log('Batch ID:', batch.batchId);
+console.log('Total jobs:', batch.totalJobs);
+console.log('Estimated wait:', batch.estimatedWaitSeconds, 'seconds');
 ```
 
 ### Wait for Document Completion

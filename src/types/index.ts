@@ -25,100 +25,111 @@ export interface GenerateDocumentOptions {
   /** Template ID to use */
   templateId: string;
   /** Output format */
-  format: 'pdf' | 'excel';
+  format: 'pdf' | 'excel' | 'csv';
   /** Template variables for content generation */
   variables?: Record<string, unknown>;
-  /** Workspace ID to generate document in (optional, defaults to user's current workspace) */
-  workspaceId?: string;
+  /** Custom filename (without extension) */
+  filename?: string;
   /** Webhook URL to receive completion notification */
   webhookUrl?: string;
-  /** Secret for webhook signature verification */
-  webhookSecret?: string;
   /** Custom metadata to pass through to webhook */
   metadata?: Record<string, unknown>;
+  /** Use draft version instead of published version (for testing) */
+  useDraft?: boolean;
+  /** Force use of purchased credits instead of free quota */
+  useCredit?: boolean;
 }
 
 export interface GenerateBatchOptions {
   /** Template ID to use */
   templateId: string;
   /** Output format */
-  format: 'pdf' | 'excel';
-  /** List of documents to generate */
-  documents: BatchDocument[];
-  /** Workspace ID to generate documents in (optional, defaults to user's current workspace) */
-  workspaceId?: string;
+  format: 'pdf' | 'excel' | 'csv';
+  /** List of variable sets (one per document) - each object contains the variables for that document */
+  documents: Record<string, unknown>[];
   /** Webhook URL to receive batch completion notification */
   webhookUrl?: string;
-  /** Secret for webhook signature verification */
-  webhookSecret?: string;
-}
-
-export interface BatchDocument {
-  /** Template variables for this document */
-  variables?: Record<string, unknown>;
-  /** Custom metadata for this document */
+  /** Custom metadata for the batch */
   metadata?: Record<string, unknown>;
+  /** Use draft version instead of published version (for testing) */
+  useDraft?: boolean;
+  /** Force use of purchased credits instead of free quota */
+  useCredit?: boolean;
 }
 
+/**
+ * Response from document generation request.
+ * Note: This is an async operation - the document is queued for generation.
+ * Use `waitForCompletion()` or poll `getJob()` to get the downloadUrl once ready.
+ */
 export interface GenerateDocumentResponse {
   /** Job ID for tracking */
   jobId: string;
-  /** Job status */
+  /** Job status (will be 'queued' for new requests) */
   status: DocumentJobStatus;
-  /** Signed download URL (available when completed) */
-  downloadUrl?: string;
-  /** URL expiration time */
-  expiresAt?: string;
-  /** Created timestamp */
-  createdAt: string;
+  /** URL to check job status */
+  statusUrl: string;
+  /** Estimated wait time in seconds */
+  estimatedWaitSeconds: number;
 }
 
+/**
+ * Response from batch document generation request.
+ * Note: This is an async operation - documents are queued for generation.
+ * Use `getBatch()` to poll for completion status.
+ */
 export interface GenerateBatchResponse {
   /** Batch ID for tracking */
   batchId: string;
-  /** Batch status */
+  /** Batch status (will be 'queued' for new requests) */
   status: string;
-  /** Total documents in batch */
-  totalDocuments: number;
-  /** Number of completed documents */
-  completed: number;
-  /** Number of failed documents */
-  failed: number;
-  /** Created timestamp */
-  createdAt: string;
+  /** Total jobs in batch */
+  totalJobs: number;
+  /** URL to check batch status */
+  statusUrl: string;
+  /** Estimated wait time in seconds */
+  estimatedWaitSeconds: number;
 }
 
 export interface DocumentJob {
   /** Job ID */
-  id: string;
+  jobId: string;
   /** Job status */
   status: DocumentJobStatus;
   /** Output format */
-  format: 'pdf' | 'excel';
+  format: 'pdf' | 'excel' | 'csv';
   /** Template ID used */
   templateId: string;
   /** Template name */
   templateName?: string;
+  /** Custom filename */
+  filename?: string;
   /** Signed download URL (available when completed) */
   downloadUrl?: string;
-  /** URL expiration time */
-  expiresAt?: string;
+  /** When download URL expires */
+  downloadUrlExpiresAt?: string;
   /** File size in bytes */
   fileSize?: number;
-  /** Processing duration in milliseconds */
-  duration?: number;
   /** Error message (if failed) */
-  error?: string;
+  errorMessage?: string;
+  /** Error code (if failed) */
+  errorCode?: string;
   /** Custom metadata */
   metadata?: Record<string, unknown>;
-  /** Started timestamp */
-  startedAt?: string;
-  /** Completed timestamp */
-  completedAt?: string;
+  /** Whether a webhook was configured for this job */
+  hasWebhook?: boolean;
+  /** Whether webhook was successfully delivered */
+  webhookSent?: boolean;
+  /** Webhook delivery error if failed */
+  webhookError?: string;
   /** Created timestamp */
   createdAt: string;
-  /** Updated timestamp */
-  updatedAt: string;
+  /** When processing started */
+  processingAt?: string;
+  /** Completed timestamp */
+  completedAt?: string;
+  /** When file expires from storage */
+  expiresAt?: string;
 }
 
 export type DocumentJobStatus =
@@ -131,7 +142,7 @@ export interface ListDocumentJobsOptions {
   /** Filter by status */
   status?: DocumentJobStatus;
   /** Filter by format */
-  format?: 'pdf' | 'excel';
+  format?: 'pdf' | 'excel' | 'csv';
   /** Filter by template ID */
   templateId?: string;
   /** Filter by workspace ID */
@@ -142,8 +153,8 @@ export interface ListDocumentJobsOptions {
   dateTo?: string | Date;
   /** Number of results per page (default: 20) */
   limit?: number;
-  /** Page number (default: 1) */
-  page?: number;
+  /** Offset for pagination */
+  offset?: number;
 }
 
 // ============================================

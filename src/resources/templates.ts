@@ -25,7 +25,7 @@ export class TemplatesResource {
    */
   async get(id: string): Promise<Template> {
     const response = await this.http.get<ApiResponse<Template>>(
-      `/api/v1/templates/${id}`
+      `/api/templates/attachment/${id}`
     );
     return response.data;
   }
@@ -46,7 +46,7 @@ export class TemplatesResource {
     options: ListTemplatesOptions = {}
   ): Promise<{ data: Template[]; meta: PaginationMeta }> {
     const response = await this.http.get<ApiResponse<Template[]>>(
-      '/api/v1/templates',
+      '/api/templates/attachment',
       {
         type: options.type,
         limit: options.limit,
