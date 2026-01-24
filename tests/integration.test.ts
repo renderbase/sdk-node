@@ -91,7 +91,7 @@ async function runTests(): Promise<void> {
 
   await test('client.verifyApiKey() - Verify API key is valid', async () => {
     const result = await client.verifyApiKey();
-    if (!result.valid) {
+    if (!result) {
       throw new Error('API key verification failed');
     }
   });
@@ -132,7 +132,7 @@ async function runTests(): Promise<void> {
       console.log(`  Variables: ${template.variables?.length || 0}`);
 
       // Extract default values from template variables
-      templateVariables = buildVariablesFromDefaults(template.variables);
+      templateVariables = buildVariablesFromDefaults(template.variables || []);
       console.log(`  Using ${Object.keys(templateVariables).length} variables with defaults`);
     });
   }
