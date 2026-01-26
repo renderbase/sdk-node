@@ -6,6 +6,19 @@
 // Configuration Types
 // ============================================
 
+export interface RetryConfig {
+  /** Maximum number of retry attempts (default: 5) */
+  maxAttempts?: number;
+  /** Initial delay between retries in milliseconds (default: 1000) */
+  initialDelayMs?: number;
+  /** Maximum delay between retries in milliseconds (default: 30000) */
+  maxDelayMs?: number;
+  /** Maximum jitter to add to delay in milliseconds (default: 1000) */
+  maxJitterMs?: number;
+  /** HTTP status codes that should trigger a retry (default: [429, 503, 504]) */
+  retryableStatuses?: number[];
+}
+
 export interface RenderbaseConfig {
   /** API Key for authentication */
   apiKey: string;
@@ -15,6 +28,8 @@ export interface RenderbaseConfig {
   timeout?: number;
   /** Custom headers to include in requests */
   headers?: Record<string, string>;
+  /** Retry configuration for failed requests */
+  retry?: RetryConfig | false;
 }
 
 // ============================================

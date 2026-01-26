@@ -1,7 +1,64 @@
 // src/utils/http.ts
+var DEFAULT_RETRY_CONFIG = {
+  maxAttempts: 5,
+  initialDelayMs: 1e3,
+  maxDelayMs: 3e4,
+  maxJitterMs: 1e3,
+  retryableStatuses: [429, 503, 504]
+};
 var HttpClient = class {
   constructor(config) {
     this.config = config;
+    if (config.retry === false) {
+      this.retryConfig = null;
+    } else {
+      this.retryConfig = {
+        ...DEFAULT_RETRY_CONFIG,
+        ...config.retry
+      };
+    }
+  }
+  /**
+   * Calculate delay for exponential backoff with jitter
+   */
+  calculateDelay(attempt, retryAfterMs) {
+    if (!this.retryConfig) return 0;
+    if (retryAfterMs !== void 0) {
+      const jitter2 = Math.random() * this.retryConfig.maxJitterMs;
+      return Math.min(retryAfterMs + jitter2, this.retryConfig.maxDelayMs);
+    }
+    const exponentialDelay = this.retryConfig.initialDelayMs * Math.pow(2, attempt);
+    const jitter = Math.random() * this.retryConfig.maxJitterMs;
+    return Math.min(exponentialDelay + jitter, this.retryConfig.maxDelayMs);
+  }
+  /**
+   * Parse Retry-After header value to milliseconds
+   */
+  parseRetryAfter(retryAfter) {
+    if (!retryAfter) return void 0;
+    const seconds = parseInt(retryAfter, 10);
+    if (!isNaN(seconds)) {
+      return seconds * 1e3;
+    }
+    const date = new Date(retryAfter);
+    if (!isNaN(date.getTime())) {
+      const delayMs = date.getTime() - Date.now();
+      return delayMs > 0 ? delayMs : void 0;
+    }
+    return void 0;
+  }
+  /**
+   * Check if the status code should trigger a retry
+   */
+  shouldRetry(statusCode) {
+    if (!this.retryConfig) return false;
+    return this.retryConfig.retryableStatuses.includes(statusCode);
+  }
+  /**
+   * Sleep for the specified duration
+   */
+  sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
   async request(method, path, options = {}) {
     const url = new URL(path, this.config.baseUrl);
@@ -22,39 +79,68 @@ var HttpClient = class {
       "User-Agent": "@renderbase/sdk/1.0.0",
       ...this.config.headers
     };
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
-    try {
-      const response = await fetch(url.toString(), {
-        method,
-        headers,
-        body: options.body ? JSON.stringify(options.body) : void 0,
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-      const data = await response.json();
-      if (!response.ok) {
-        const error = data;
-        throw new RenderbaseError(
-          error.message || `HTTP ${response.status}`,
-          error.error || "ApiError",
-          response.status
-        );
-      }
-      return data;
-    } catch (error) {
-      clearTimeout(timeoutId);
-      if (error instanceof RenderbaseError) {
-        throw error;
-      }
-      if (error instanceof Error) {
-        if (error.name === "AbortError") {
-          throw new RenderbaseError("Request timeout", "TimeoutError", 408);
+    const maxAttempts = this.retryConfig?.maxAttempts ?? 1;
+    let lastError = null;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
+      try {
+        const response = await fetch(url.toString(), {
+          method,
+          headers,
+          body: options.body ? JSON.stringify(options.body) : void 0,
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        if (!response.ok && this.shouldRetry(response.status)) {
+          const retryAfterMs = this.parseRetryAfter(response.headers.get("Retry-After"));
+          const delay = this.calculateDelay(attempt, retryAfterMs);
+          const data2 = await response.json().catch(() => ({}));
+          const error = data2;
+          lastError = new RenderbaseError(
+            error.message || `HTTP ${response.status}`,
+            error.error || "ApiError",
+            response.status
+          );
+          if (attempt < maxAttempts - 1) {
+            await this.sleep(delay);
+            continue;
+          }
         }
-        throw new RenderbaseError(error.message, "NetworkError", 0);
+        const data = await response.json();
+        if (!response.ok) {
+          const error = data;
+          throw new RenderbaseError(
+            error.message || `HTTP ${response.status}`,
+            error.error || "ApiError",
+            response.status
+          );
+        }
+        return data;
+      } catch (error) {
+        clearTimeout(timeoutId);
+        if (error instanceof RenderbaseError) {
+          if (!this.shouldRetry(error.statusCode) || attempt >= maxAttempts - 1) {
+            throw error;
+          }
+          lastError = error;
+          const delay = this.calculateDelay(attempt);
+          await this.sleep(delay);
+          continue;
+        }
+        if (error instanceof Error) {
+          if (error.name === "AbortError") {
+            throw new RenderbaseError("Request timeout", "TimeoutError", 408);
+          }
+          throw new RenderbaseError(error.message, "NetworkError", 0);
+        }
+        throw new RenderbaseError("Unknown error", "UnknownError", 0);
       }
-      throw new RenderbaseError("Unknown error", "UnknownError", 0);
     }
+    if (lastError) {
+      throw lastError;
+    }
+    throw new RenderbaseError("Request failed after retries", "RetryExhausted", 0);
   }
   async get(path, query) {
     return this.request("GET", path, { query });
@@ -340,26 +426,6 @@ var WebhooksResource = class {
     this.http = http;
   }
   /**
-   * Create a webhook subscription
-   *
-   * @example
-   * ```typescript
-   * const webhook = await renderbase.webhooks.create({
-   *   url: 'https://your-app.com/webhooks/renderbase',
-   *   events: ['document.generated', 'document.failed'],
-   *   description: 'My Webhook',
-   * });
-   * console.log('Webhook ID:', webhook.id);
-   * console.log('Secret:', webhook.secret); // Save this for verification!
-   * ```
-   */
-  async create(options) {
-    return this.http.post(
-      "/api/v1/webhook-subscriptions",
-      options
-    );
-  }
-  /**
    * Get a webhook subscription by ID
    *
    * @example
@@ -396,35 +462,6 @@ var WebhooksResource = class {
       }
     };
   }
-  /**
-   * Delete a webhook subscription
-   *
-   * @example
-   * ```typescript
-   * await renderbase.webhooks.delete('wh_abc123');
-   * console.log('Webhook deleted');
-   * ```
-   */
-  async delete(id) {
-    await this.http.delete(`/api/v1/webhook-subscriptions/${id}`);
-  }
-  /**
-   * Update a webhook subscription
-   *
-   * @example
-   * ```typescript
-   * const updated = await renderbase.webhooks.update('wh_abc123', {
-   *   events: ['document.generated', 'document.failed'],
-   *   isActive: true,
-   * });
-   * ```
-   */
-  async update(id, options) {
-    return this.http.patch(
-      `/api/v1/webhook-subscriptions/${id}`,
-      options
-    );
-  }
 };
 
 // src/client.ts
@@ -458,7 +495,8 @@ var Renderbase = class {
       baseUrl: config.baseUrl || DEFAULT_BASE_URL,
       apiKey: config.apiKey,
       timeout: config.timeout || DEFAULT_TIMEOUT,
-      headers: config.headers
+      headers: config.headers,
+      retry: config.retry
     });
     this.documents = new DocumentsResource(this.http);
     this.templates = new TemplatesResource(this.http);

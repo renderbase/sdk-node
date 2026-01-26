@@ -52,6 +52,7 @@ export class Renderbase {
       apiKey: config.apiKey,
       timeout: config.timeout || DEFAULT_TIMEOUT,
       headers: config.headers,
+      retry: config.retry,
     });
 
     this.documents = new DocumentsResource(this.http);

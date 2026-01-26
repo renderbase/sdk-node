@@ -60,6 +60,7 @@ export {
 // Types
 export type {
   RenderbaseConfig,
+  RetryConfig,
   // Document types
   GenerateDocumentOptions,
   GenerateBatchOptions,

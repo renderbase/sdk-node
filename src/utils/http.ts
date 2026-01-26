@@ -2,20 +2,100 @@
  * HTTP Client for Renderbase SDK
  */
 
-import type { ApiResponse, ApiError } from '../types';
+import type { ApiError, RetryConfig } from '../types';
 
 export interface HttpClientConfig {
   baseUrl: string;
   apiKey: string;
   timeout: number;
   headers?: Record<string, string>;
+  retry?: RetryConfig | false;
 }
+
+// Default retry configuration
+const DEFAULT_RETRY_CONFIG: Required<RetryConfig> = {
+  maxAttempts: 5,
+  initialDelayMs: 1000,
+  maxDelayMs: 30000,
+  maxJitterMs: 1000,
+  retryableStatuses: [429, 503, 504],
+};
 
 export class HttpClient {
   private config: HttpClientConfig;
+  private retryConfig: Required<RetryConfig> | null;
 
   constructor(config: HttpClientConfig) {
     this.config = config;
+
+    // Set up retry configuration
+    if (config.retry === false) {
+      this.retryConfig = null;
+    } else {
+      this.retryConfig = {
+        ...DEFAULT_RETRY_CONFIG,
+        ...config.retry,
+      };
+    }
+  }
+
+  /**
+   * Calculate delay for exponential backoff with jitter
+   */
+  private calculateDelay(attempt: number, retryAfterMs?: number): number {
+    if (!this.retryConfig) return 0;
+
+    // If server specified Retry-After, respect it (with jitter)
+    if (retryAfterMs !== undefined) {
+      const jitter = Math.random() * this.retryConfig.maxJitterMs;
+      return Math.min(retryAfterMs + jitter, this.retryConfig.maxDelayMs);
+    }
+
+    // Exponential backoff: initialDelay * 2^attempt
+    const exponentialDelay = this.retryConfig.initialDelayMs * Math.pow(2, attempt);
+
+    // Add random jitter to prevent thundering herd
+    const jitter = Math.random() * this.retryConfig.maxJitterMs;
+
+    // Cap at maxDelay
+    return Math.min(exponentialDelay + jitter, this.retryConfig.maxDelayMs);
+  }
+
+  /**
+   * Parse Retry-After header value to milliseconds
+   */
+  private parseRetryAfter(retryAfter: string | null): number | undefined {
+    if (!retryAfter) return undefined;
+
+    // Check if it's a number (seconds)
+    const seconds = parseInt(retryAfter, 10);
+    if (!isNaN(seconds)) {
+      return seconds * 1000;
+    }
+
+    // Try to parse as HTTP-date
+    const date = new Date(retryAfter);
+    if (!isNaN(date.getTime())) {
+      const delayMs = date.getTime() - Date.now();
+      return delayMs > 0 ? delayMs : undefined;
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Check if the status code should trigger a retry
+   */
+  private shouldRetry(statusCode: number): boolean {
+    if (!this.retryConfig) return false;
+    return this.retryConfig.retryableStatuses.includes(statusCode);
+  }
+
+  /**
+   * Sleep for the specified duration
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   private async request<T>(
@@ -48,47 +128,88 @@ export class HttpClient {
       ...this.config.headers,
     };
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
+    const maxAttempts = this.retryConfig?.maxAttempts ?? 1;
+    let lastError: RenderbaseError | null = null;
 
-    try {
-      const response = await fetch(url.toString(), {
-        method,
-        headers,
-        body: options.body ? JSON.stringify(options.body) : undefined,
-        signal: controller.signal,
-      });
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
 
-      clearTimeout(timeoutId);
+      try {
+        const response = await fetch(url.toString(), {
+          method,
+          headers,
+          body: options.body ? JSON.stringify(options.body) : undefined,
+          signal: controller.signal,
+        });
 
-      const data = await response.json();
+        clearTimeout(timeoutId);
 
-      if (!response.ok) {
-        const error = data as ApiError;
-        throw new RenderbaseError(
-          error.message || `HTTP ${response.status}`,
-          error.error || 'ApiError',
-          response.status
-        );
-      }
+        // Check if we should retry
+        if (!response.ok && this.shouldRetry(response.status)) {
+          const retryAfterMs = this.parseRetryAfter(response.headers.get('Retry-After'));
+          const delay = this.calculateDelay(attempt, retryAfterMs);
 
-      return data as T;
-    } catch (error) {
-      clearTimeout(timeoutId);
+          // Store the error in case this is the last attempt
+          const data = await response.json().catch(() => ({}));
+          const error = data as ApiError;
+          lastError = new RenderbaseError(
+            error.message || `HTTP ${response.status}`,
+            error.error || 'ApiError',
+            response.status
+          );
 
-      if (error instanceof RenderbaseError) {
-        throw error;
-      }
-
-      if (error instanceof Error) {
-        if (error.name === 'AbortError') {
-          throw new RenderbaseError('Request timeout', 'TimeoutError', 408);
+          // If we have more attempts, wait and retry
+          if (attempt < maxAttempts - 1) {
+            await this.sleep(delay);
+            continue;
+          }
         }
-        throw new RenderbaseError(error.message, 'NetworkError', 0);
-      }
 
-      throw new RenderbaseError('Unknown error', 'UnknownError', 0);
+        const data = await response.json();
+
+        if (!response.ok) {
+          const error = data as ApiError;
+          throw new RenderbaseError(
+            error.message || `HTTP ${response.status}`,
+            error.error || 'ApiError',
+            response.status
+          );
+        }
+
+        return data as T;
+      } catch (error) {
+        clearTimeout(timeoutId);
+
+        if (error instanceof RenderbaseError) {
+          // If it's a retryable error and we have attempts left, the loop will continue
+          // Otherwise, throw the error
+          if (!this.shouldRetry(error.statusCode) || attempt >= maxAttempts - 1) {
+            throw error;
+          }
+          lastError = error;
+          const delay = this.calculateDelay(attempt);
+          await this.sleep(delay);
+          continue;
+        }
+
+        if (error instanceof Error) {
+          if (error.name === 'AbortError') {
+            throw new RenderbaseError('Request timeout', 'TimeoutError', 408);
+          }
+          throw new RenderbaseError(error.message, 'NetworkError', 0);
+        }
+
+        throw new RenderbaseError('Unknown error', 'UnknownError', 0);
+      }
     }
+
+    // If we've exhausted all retries, throw the last error
+    if (lastError) {
+      throw lastError;
+    }
+
+    throw new RenderbaseError('Request failed after retries', 'RetryExhausted', 0);
   }
 
   async get<T>(path: string, query?: Record<string, unknown>): Promise<T> {

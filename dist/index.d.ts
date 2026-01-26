@@ -1,31 +1,18 @@
 /**
- * HTTP Client for Renderbase SDK
- */
-interface HttpClientConfig {
-    baseUrl: string;
-    apiKey: string;
-    timeout: number;
-    headers?: Record<string, string>;
-}
-declare class HttpClient {
-    private config;
-    constructor(config: HttpClientConfig);
-    private request;
-    get<T>(path: string, query?: Record<string, unknown>): Promise<T>;
-    post<T>(path: string, body?: unknown): Promise<T>;
-    put<T>(path: string, body?: unknown): Promise<T>;
-    patch<T>(path: string, body?: unknown): Promise<T>;
-    delete<T>(path: string): Promise<T>;
-}
-declare class RenderbaseError extends Error {
-    code: string;
-    statusCode: number;
-    constructor(message: string, code: string, statusCode: number);
-}
-
-/**
  * Renderbase SDK Types
  */
+interface RetryConfig {
+    /** Maximum number of retry attempts (default: 5) */
+    maxAttempts?: number;
+    /** Initial delay between retries in milliseconds (default: 1000) */
+    initialDelayMs?: number;
+    /** Maximum delay between retries in milliseconds (default: 30000) */
+    maxDelayMs?: number;
+    /** Maximum jitter to add to delay in milliseconds (default: 1000) */
+    maxJitterMs?: number;
+    /** HTTP status codes that should trigger a retry (default: [429, 503, 504]) */
+    retryableStatuses?: number[];
+}
 interface RenderbaseConfig {
     /** API Key for authentication */
     apiKey: string;
@@ -35,6 +22,8 @@ interface RenderbaseConfig {
     timeout?: number;
     /** Custom headers to include in requests */
     headers?: Record<string, string>;
+    /** Retry configuration for failed requests */
+    retry?: RetryConfig | false;
 }
 interface GenerateDocumentOptions {
     /** Template ID to use */
@@ -197,14 +186,6 @@ interface WebhookSubscription {
     updatedAt: string;
 }
 type WebhookEventType = 'document.generated' | 'document.failed' | 'document.downloaded';
-interface CreateWebhookOptions {
-    /** URL to receive webhook events */
-    url: string;
-    /** Event types to subscribe to */
-    events: WebhookEventType[];
-    /** Webhook description (optional) */
-    description?: string;
-}
 interface WebhookEvent {
     id: string;
     type: WebhookEventType;
@@ -236,6 +217,50 @@ interface User {
     teamName?: string;
     workspaceId?: string;
     workspaceName?: string;
+}
+
+/**
+ * HTTP Client for Renderbase SDK
+ */
+
+interface HttpClientConfig {
+    baseUrl: string;
+    apiKey: string;
+    timeout: number;
+    headers?: Record<string, string>;
+    retry?: RetryConfig | false;
+}
+declare class HttpClient {
+    private config;
+    private retryConfig;
+    constructor(config: HttpClientConfig);
+    /**
+     * Calculate delay for exponential backoff with jitter
+     */
+    private calculateDelay;
+    /**
+     * Parse Retry-After header value to milliseconds
+     */
+    private parseRetryAfter;
+    /**
+     * Check if the status code should trigger a retry
+     */
+    private shouldRetry;
+    /**
+     * Sleep for the specified duration
+     */
+    private sleep;
+    private request;
+    get<T>(path: string, query?: Record<string, unknown>): Promise<T>;
+    post<T>(path: string, body?: unknown): Promise<T>;
+    put<T>(path: string, body?: unknown): Promise<T>;
+    patch<T>(path: string, body?: unknown): Promise<T>;
+    delete<T>(path: string): Promise<T>;
+}
+declare class RenderbaseError extends Error {
+    code: string;
+    statusCode: number;
+    constructor(message: string, code: string, statusCode: number);
 }
 
 /**
@@ -428,26 +453,14 @@ declare class TemplatesResource {
 
 /**
  * Webhooks Resource
+ *
+ * Provides read-only access to webhook subscriptions and signature verification.
+ * Webhook subscriptions are managed through the Renderbase dashboard.
  */
 
 declare class WebhooksResource {
     private http;
     constructor(http: HttpClient);
-    /**
-     * Create a webhook subscription
-     *
-     * @example
-     * ```typescript
-     * const webhook = await renderbase.webhooks.create({
-     *   url: 'https://your-app.com/webhooks/renderbase',
-     *   events: ['document.generated', 'document.failed'],
-     *   description: 'My Webhook',
-     * });
-     * console.log('Webhook ID:', webhook.id);
-     * console.log('Secret:', webhook.secret); // Save this for verification!
-     * ```
-     */
-    create(options: CreateWebhookOptions): Promise<WebhookSubscription>;
     /**
      * Get a webhook subscription by ID
      *
@@ -471,30 +484,6 @@ declare class WebhooksResource {
         data: WebhookSubscription[];
         meta: PaginationMeta;
     }>;
-    /**
-     * Delete a webhook subscription
-     *
-     * @example
-     * ```typescript
-     * await renderbase.webhooks.delete('wh_abc123');
-     * console.log('Webhook deleted');
-     * ```
-     */
-    delete(id: string): Promise<void>;
-    /**
-     * Update a webhook subscription
-     *
-     * @example
-     * ```typescript
-     * const updated = await renderbase.webhooks.update('wh_abc123', {
-     *   events: ['document.generated', 'document.failed'],
-     *   isActive: true,
-     * });
-     * ```
-     */
-    update(id: string, options: Partial<CreateWebhookOptions> & {
-        isActive?: boolean;
-    }): Promise<WebhookSubscription>;
 }
 
 /**
@@ -624,4 +613,4 @@ declare class WebhookSignatureError extends Error {
     constructor(message: string);
 }
 
-export { type ApiError, type ApiResponse, type CreateWebhookOptions, type DocumentJob, type DocumentJobStatus, DocumentsResource, type GenerateBatchOptions, type GenerateBatchResponse, type GenerateDocumentOptions, type GenerateDocumentResponse, type ListDocumentJobsOptions, type ListTemplatesOptions, type PaginationMeta, Renderbase, type RenderbaseConfig, RenderbaseError, type Template, type TemplateVariable, TemplatesResource, type User, type VerifyWebhookOptions, type WebhookEvent, type WebhookEventType, WebhookSignatureError, type WebhookSubscription, WebhooksResource, computeSignature, createClient, parseSignatureHeader, verifyWebhookSignature };
+export { type ApiError, type ApiResponse, type DocumentJob, type DocumentJobStatus, DocumentsResource, type GenerateBatchOptions, type GenerateBatchResponse, type GenerateDocumentOptions, type GenerateDocumentResponse, type ListDocumentJobsOptions, type ListTemplatesOptions, type PaginationMeta, Renderbase, type RenderbaseConfig, RenderbaseError, type RetryConfig, type Template, type TemplateVariable, TemplatesResource, type User, type VerifyWebhookOptions, type WebhookEvent, type WebhookEventType, WebhookSignatureError, type WebhookSubscription, WebhooksResource, computeSignature, createClient, parseSignatureHeader, verifyWebhookSignature };
